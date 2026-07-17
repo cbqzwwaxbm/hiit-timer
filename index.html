@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HIIT Timer (Customizable & Beep)</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --text-color: #ffffff;
+            --work-color: #ff3b30;
+            --rest-color: #34c759;
+            --card-bg: #1e1e1e;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+            transition: background-color 0.5s ease;
+        }
+        .container {
+            text-align: center;
+            width: 100%;
+            max-width: 400px;
+            background-color: var(--card-bg);
+            padding: 30px;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            transition: background-color 0.5s ease;
+        }
+        
+        /* 設定エリアのスタイル */
+        .settings {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 15px;
+            margin-bottom: 30px;
+            text-align: left;
+        }
+        .settings.hidden {
+            display: none;
+        }
+        .input-group {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #2a2a2a;
+            padding: 10px 15px;
+            border-radius: 10px;
+        }
+        .input-group label {
+            font-size: 1rem;
+            font-weight: bold;
+            color: #ccc;
+        }
+        .input-group input {
+            background: transparent;
+            border: none;
+            color: #fff;
+            font-size: 1.2rem;
+            font-weight: bold;
+            text-align: right;
+            width: 80px;
+            outline: none;
+        }
+
+        /* タイマー表示エリア */
+        #status {
+            font-size: 2.2rem;
+            font-weight: bold;
+            margin-bottom: 5px;
+            letter-spacing: 2px;
+        }
+        #timer {
+            font-size: 7rem;
+            font-weight: 800;
+            margin: 10px 0;
+            font-variant-numeric: tabular-nums;
+            line-height: 1;
+        }
+        #info {
+            font-size: 1.4rem;
+            color: #aaa;
+            margin-bottom: 30px;
+        }
+        
+        /* 操作ボタン */
+        .buttons {
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            flex: 1;
+            background-color: #3a3a3c;
+            color: white;
+            border: none;
+            padding: 18px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border-radius: 15px;
+            cursor: pointer;
+            transition: transform 0.1s, background-color 0.2s;
+        }
+        button:active {
+            transform: scale(0.96);
+        }
+        #startBtn {
+            background-color: #34c759;
+        }
+        #startBtn.running {
+            background-color: #ff9500;
+        }
+        #resetBtn {
+            background-color: #8e8e93;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container" id="mainContainer">
+    <!-- 設定画面 -->
+    <div class="settings" id="settingsArea">
+        <div class="input-group">
+            <label for="workInput">WORK (運動秒)</label>
+            <input type="number" id="workInput" value="20" min="1" max="3600">
+        </div>
+        <div class="input-group">
+            <label for="restInput">REST (休憩秒)</label>
+            <input type="number" id="restInput" value="10" min="0" max="3600">
+        </div>
+        <div class="input-group">
+            <label for="setsInput">SETS (セット数)</label>
+            <input type="number" id="setsInput" value="8" min="1" max="99">
+        </div>
+    </div>
+
+    <!-- タイマー表示画面 -->
+    <div id="status">READY</div>
+    <div id="timer">20</div>
+    <div id="info">セット: 1 / 8</div>
+
+    <!-- コントロールボタン -->
+    <div class="buttons">
+        <button id="startBtn">START</button>
+        <button id="resetBtn" style="display: none;">RESET</button>
+    </div>
+</div>
+
+<script>
+    // --- 状態管理変数 ---
+    let workTime = 20;
+    let restTime = 10;
+    let totalSets = 8;
+
+    let currentSet = 1;
+    let isWork = true; // true: 運動中, false: 休憩中
+    let timeLeft = 20;
+    let timerId = null;
+    let isRunning = false;
+    let hasStarted = false; // タイマーが一度でもスタートしたか
+
+    // --- Web Audio API (効果音生成) ---
+    let audioCtx = null;
+
+    function initAudio() {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
+    }
+
+    // 指定した周波数と長さでビープ音を鳴らす関数
+    function playBeep(frequency, duration, type = 'sine') {
+        try {
+            initAudio();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.type = type;
+            oscillator.frequency.value = frequency;
+
+            // 音量調節（プチッというノイズを防ぐため、最後にかけて音量を徐々に落とす）
+            gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + duration);
+        } catch (e) {
+            console.error("AudioContext Error:", e);
+        }
+    }
+
+    // 各シチュエーションの効果音
+    function soundCountdown() {
+        playBeep(800, 0.1); // 低い「ピッ」
+    }
+
+    function soundStart() {
+        playBeep(1200, 0.3); // 高い「ピィー」（運動開始）
+    }
+
+    function soundRest() {
+        playBeep(1000, 0.3); // 中くらいの「ピィー」（休憩開始）
+    }
+
+    function soundComplete() {
+        // ピ・ピ・ピ・ポーン (終了ファンファーレ)
+        setTimeout(() => playBeep(880, 0.12), 0);
+        setTimeout(() => playBeep(1046, 0.12), 150);
+        setTimeout(() => playBeep(1318, 0.12), 300);
+        setTimeout(() => playBeep(1760, 0.4), 450);
+    }
+
+    // --- DOM要素 ---
+    const workInput = document.getElementById('workInput');
+    const restInput = document.getElementById('restInput');
+    const setsInput = document.getElementById('setsInput');
+    const settingsArea = document.getElementById('settingsArea');
+    const mainContainer = document.getElementById('mainContainer');
+
+    const statusEl = document.getElementById('status');
+    const timerEl = document.getElementById('timer');
+    const infoEl = document.getElementById('info');
+    const startBtn = document.getElementById('startBtn');
+    const resetBtn = document.getElementById('resetBtn');
+
+    // --- 設定値の反映 ---
+    function applySettings() {
+        workTime = parseInt(workInput.value) || 20;
+        restTime = parseInt(restInput.value) !== undefined ? parseInt(restInput.value) : 10;
+        totalSets = parseInt(setsInput.value) || 8;
+
+        if (!hasStarted) {
+            timeLeft = workTime;
+            timerEl.textContent = timeLeft;
+            infoEl.textContent = `セット: 1 / ${totalSets}`;
+        }
+    }
+
+    // 入力欄が変更されたら即座に反映
+    [workInput, restInput, setsInput].forEach(input => {
+        input.addEventListener('input', applySettings);
+    });
+
+    // --- 画面表示の更新 ---
+    function updateDisplay() {
+        timerEl.textContent = timeLeft;
+        infoEl.textContent = `セット: ${currentSet} / ${totalSets}`;
+        
+        if (isWork) {
+            statusEl.textContent = "WORK";
+            mainContainer.style.backgroundColor = "var(--work-color)";
+        } else {
+            statusEl.textContent = "REST";
+            mainContainer.style.backgroundColor = "var(--rest-color)";
+        }
+    }
+
+    // --- タイマーのメイン処理（1秒ごとの刻み） ---
+    function tick() {
+        if (timeLeft > 0) {
+            timeLeft--;
+            timerEl.textContent = timeLeft;
+            
+            // ラスト3秒でカウントダウンの「ピッ」を鳴らす
+            if (timeLeft <= 3 && timeLeft > 0) {
+                soundCountdown();
+            }
+        } else {
+            // 時間切れ時の切り替え
+            if (isWork) {
+                if (currentSet < totalSets) {
+                    // 運動終了 -> 休憩
+                    isWork = false;
+                    timeLeft = restTime;
+                    soundRest();
+                } else {
+                    // すべて終了
+                    endTimer();
+                    return;
+                }
+            } else {
+                // 休憩終了 -> 次のセットの運動
+                isWork = true;
+                currentSet++;
+                timeLeft = workTime;
+                soundStart();
+            }
+            updateDisplay();
+        }
+    }
+
+    // --- コントロール関数 ---
+    function startTimer() {
+        initAudio(); // ユーザー操作をトリガーにAudioContextを初期化（ブラウザ制限対策）
+        
+        if (!hasStarted) {
+            hasStarted = true;
+            settingsArea.classList.add('hidden'); // 開始したら設定入力を隠す
+            resetBtn.style.display = 'block';     // リセットボタンを表示
+            soundStart();                         // 初回スタート音
+        }
+
+        isRunning = true;
+        startBtn.textContent = "PAUSE";
+        startBtn.classList.add('running');
+        
+        updateDisplay();
+        timerId = setInterval(tick, 1000);
+    }
+
+    function pauseTimer() {
+        isRunning = false;
+        startBtn.textContent = "START";
+        startBtn.classList.remove('running');
+        clearInterval(timerId);
+    }
+
+    function endTimer() {
+        pauseTimer();
+        statusEl.textContent = "COMPLETE!";
+        timerEl.textContent = "0";
+        mainContainer.style.backgroundColor = "var(--card-bg)";
+        soundComplete();
+    }
+
+    function resetTimer() {
+        pauseTimer();
+        hasStarted = false;
+        isRunning = false;
+        
+        // 状態を初期値に戻す
+        currentSet = 1;
+        isWork = true;
+        applySettings();
+        
+        // 表示を初期化
+        statusEl.textContent = "READY";
+        mainContainer.style.backgroundColor = "var(--card-bg)";
+        settingsArea.classList.remove('hidden'); // 設定画面を再表示
+        resetBtn.style.display = 'none';         // リセットボタンを隠す
+        startBtn.textContent = "START";
+        startBtn.classList.remove('running');
+    }
+
+    // --- ボタンのクリックイベント ---
+    startBtn.addEventListener('click', () => {
+        if (isRunning) {
+            pauseTimer();
+        } else {
+            startTimer();
+        }
+    });
+
+    resetBtn.addEventListener('click', resetTimer);
+
+    // 起動時に初期値を適用
+    applySettings();
+</script>
+
+</body>
+</html>
