@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HIIT Timer (Customizable & Beep)</title>
+    <title>HIIT Timer (Customizable & Volume Control)</title>
     <style>
         :root {
             --bg-color: #121212;
@@ -61,7 +61,7 @@
             font-weight: bold;
             color: #ccc;
         }
-        .input-group input {
+        .input-group input[type="number"] {
             background: transparent;
             border: none;
             color: #fff;
@@ -70,6 +70,26 @@
             text-align: right;
             width: 80px;
             outline: none;
+        }
+
+        /* 音量スライダーのカスタムスタイル */
+        .input-group input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 120px;
+            height: 6px;
+            background: #555;
+            border-radius: 5px;
+            outline: none;
+        }
+        .input-group input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #34c759;
+            cursor: pointer;
         }
 
         /* タイマー表示エリア */
@@ -140,6 +160,11 @@
             <label for="setsInput">SETS (セット数)</label>
             <input type="number" id="setsInput" value="8" min="1" max="99">
         </div>
+        <!-- 音量調整スライダーの追加 -->
+        <div class="input-group">
+            <label id="volLabel" for="volumeInput">VOLUME (音量: 50%)</label>
+            <input type="range" id="volumeInput" min="0" max="100" value="50">
+        </div>
     </div>
 
     <!-- タイマー表示画面 -->
@@ -159,6 +184,7 @@
     let workTime = 20;
     let restTime = 10;
     let totalSets = 8;
+    let volumePercent = 50; // 音量（0% 〜 100%）
 
     let currentSet = 1;
     let isWork = true; // true: 運動中, false: 休憩中
@@ -179,7 +205,7 @@
         }
     }
 
-    // 指定した周波数と長さでビープ音を鳴らす関数
+    // 指定した周波数と長さでビープ音を鳴らす
     function playBeep(frequency, duration, type = 'sine') {
         try {
             initAudio();
@@ -189,8 +215,13 @@
             oscillator.type = type;
             oscillator.frequency.value = frequency;
 
-            // 音量調節（プチッというノイズを防ぐため、最後にかけて音量を徐々に落とす）
-            gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+            // --- 音量調節の計算 ---
+            // ブラウザの最大音量（1.0）は大きすぎるため、安全な上限値（0.3）を基準に％計算します。
+            const maxSafeGain = 0.3; 
+            const targetGain = (volumePercent / 100) * maxSafeGain;
+
+            gainNode.gain.setValueAtTime(targetGain, audioCtx.currentTime);
+            // 音がプチッと切れるのを防ぐため、音の終わりのミリ秒で音量を0まで滑らかに下げます
             gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
 
             oscillator.connect(gainNode);
@@ -228,6 +259,8 @@
     const workInput = document.getElementById('workInput');
     const restInput = document.getElementById('restInput');
     const setsInput = document.getElementById('setsInput');
+    const volumeInput = document.getElementById('volumeInput');
+    const volLabel = document.getElementById('volLabel');
     const settingsArea = document.getElementById('settingsArea');
     const mainContainer = document.getElementById('mainContainer');
 
@@ -242,6 +275,10 @@
         workTime = parseInt(workInput.value) || 20;
         restTime = parseInt(restInput.value) !== undefined ? parseInt(restInput.value) : 10;
         totalSets = parseInt(setsInput.value) || 8;
+        volumePercent = parseInt(volumeInput.value);
+
+        // ボリューム表示テキストを更新
+        volLabel.textContent = `VOLUME (音量: ${volumePercent}%)`;
 
         if (!hasStarted) {
             timeLeft = workTime;
@@ -250,9 +287,16 @@
         }
     }
 
-    // 入力欄が変更されたら即座に反映
-    [workInput, restInput, setsInput].forEach(input => {
+    // 入力欄やスライダーが変更されたら即座に反映
+    [workInput, restInput, setsInput, volumeInput].forEach(input => {
         input.addEventListener('input', applySettings);
+    });
+
+    // スライダーのツマミを離した瞬間にテストで音を1回鳴らす（音量確認用）
+    volumeInput.addEventListener('change', () => {
+        if (!isRunning) {
+            soundCountdown(); // 「ピッ」と鳴らして音量を確認
+        }
     });
 
     // --- 画面表示の更新 ---
@@ -305,11 +349,11 @@
 
     // --- コントロール関数 ---
     function startTimer() {
-        initAudio(); // ユーザー操作をトリガーにAudioContextを初期化（ブラウザ制限対策）
+        initAudio(); // ユーザー操作をトリガーにAudioContextを初期化
         
         if (!hasStarted) {
             hasStarted = true;
-            settingsArea.classList.add('hidden'); // 開始したら設定入力を隠す
+            settingsArea.classList.add('hidden'); // 開始したら設定を隠す
             resetBtn.style.display = 'block';     // リセットボタンを表示
             soundStart();                         // 初回スタート音
         }
