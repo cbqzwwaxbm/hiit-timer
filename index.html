@@ -160,9 +160,8 @@
             <label for="setsInput">SETS (セット数)</label>
             <input type="number" id="setsInput" value="3" min="1" max="99">
         </div>
-        <!-- 音量調整スライダーの追加 -->
         <div class="input-group">
-            <label id="volLabel" for="volumeInput">VOLUME (音量: 50%)</label>
+            <label id="volLabel" for="volumeInput">VOLUME (音量: 75%)</label>
             <input type="range" id="volumeInput" min="0" max="100" value="75">
         </div>
     </div>
@@ -183,15 +182,15 @@
     // --- 状態管理変数 ---
     let workTime = 20;
     let restTime = 10;
-    let totalSets = 8;
-    let volumePercent = 50; // 音量（0% 〜 100%）
+    let totalSets = 3;
+    let volumePercent = 75;
 
     let currentSet = 1;
     let isWork = true; // true: 運動中, false: 休憩中
     let timeLeft = 20;
     let timerId = null;
     let isRunning = false;
-    let hasStarted = false; // タイマーが一度でもスタートしたか
+    let hasStarted = false;
 
     // --- Web Audio API (効果音生成) ---
     let audioCtx = null;
@@ -215,13 +214,10 @@
             oscillator.type = type;
             oscillator.frequency.value = frequency;
 
-            // --- 音量調節の計算 ---
-            // ブラウザの最大音量（1.0）は大きすぎるため、安全な上限値（0.3）を基準に％計算します。
             const maxSafeGain = 0.3; 
             const targetGain = (volumePercent / 100) * maxSafeGain;
 
             gainNode.gain.setValueAtTime(targetGain, audioCtx.currentTime);
-            // 音がプチッと切れるのを防ぐため、音の終わりのミリ秒で音量を0まで滑らかに下げます
             gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
 
             oscillator.connect(gainNode);
@@ -277,7 +273,6 @@
         totalSets = parseInt(setsInput.value) || 8;
         volumePercent = parseInt(volumeInput.value);
 
-        // ボリューム表示テキストを更新
         volLabel.textContent = `VOLUME (音量: ${volumePercent}%)`;
 
         if (!hasStarted) {
@@ -292,10 +287,9 @@
         input.addEventListener('input', applySettings);
     });
 
-    // スライダーのツマミを離した瞬間にテストで音を1回鳴らす（音量確認用）
     volumeInput.addEventListener('change', () => {
         if (!isRunning) {
-            soundCountdown(); // 「ピッ」と鳴らして音量を確認
+            soundCountdown();
         }
     });
 
@@ -315,47 +309,49 @@
 
     // --- タイマーのメイン処理（1秒ごとの刻み） ---
     function tick() {
-        if (timeLeft > 0) {
+        // カウントダウンを進める前に「1秒」だった場合の切り替え判定を行う
+        if (timeLeft > 1) {
             timeLeft--;
             timerEl.textContent = timeLeft;
             
-            // ラスト3秒でカウントダウンの「ピッ」を鳴らす
-            if (timeLeft <= 3 && timeLeft > 0) {
+            // 残り3秒・2秒のタイミングで「ピッ」を鳴らす（切り替え直前のビープ音）
+            if (timeLeft <= 3) {
                 soundCountdown();
             }
         } else {
-            // 時間切れ時の切り替え
+            // timeLeft が 1 の状態で1秒経過した＝フェーズ切り替えの瞬間
             if (isWork) {
                 if (currentSet < totalSets) {
-                    // 運動終了 -> 休憩
+                    // WORK(1秒)終了 -> すぐにRESTの設定秒数へ切り替え
                     isWork = false;
                     timeLeft = restTime;
                     soundRest();
+                    updateDisplay();
                 } else {
-                    // すべて終了
+                    // 全セット終了時のみ「0秒」を表示してファンファーレ
                     endTimer();
                     return;
                 }
             } else {
-                // 休憩終了 -> 次のセットの運動
+                // REST(1秒)終了 -> すぐに次のセットのWORK設定秒数へ切り替え
                 isWork = true;
                 currentSet++;
                 timeLeft = workTime;
                 soundStart();
+                updateDisplay();
             }
-            updateDisplay();
         }
     }
 
     // --- コントロール関数 ---
     function startTimer() {
-        initAudio(); // ユーザー操作をトリガーにAudioContextを初期化
+        initAudio();
         
         if (!hasStarted) {
             hasStarted = true;
-            settingsArea.classList.add('hidden'); // 開始したら設定を隠す
-            resetBtn.style.display = 'block';     // リセットボタンを表示
-            soundStart();                         // 初回スタート音
+            settingsArea.classList.add('hidden');
+            resetBtn.style.display = 'block';
+            soundStart();
         }
 
         isRunning = true;
@@ -386,16 +382,14 @@
         hasStarted = false;
         isRunning = false;
         
-        // 状態を初期値に戻す
         currentSet = 1;
         isWork = true;
         applySettings();
         
-        // 表示を初期化
         statusEl.textContent = "READY";
         mainContainer.style.backgroundColor = "var(--card-bg)";
-        settingsArea.classList.remove('hidden'); // 設定画面を再表示
-        resetBtn.style.display = 'none';         // リセットボタンを隠す
+        settingsArea.classList.remove('hidden');
+        resetBtn.style.display = 'none';
         startBtn.textContent = "START";
         startBtn.classList.remove('running');
     }
@@ -411,7 +405,6 @@
 
     resetBtn.addEventListener('click', resetTimer);
 
-    // 起動時に初期値を適用
     applySettings();
 </script>
 
