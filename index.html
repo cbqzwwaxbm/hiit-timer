@@ -3,13 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HIIT Timer (Customizable & Volume Control)</title>
+    <title>HIIT Timer (With Prep Time)</title>
     <style>
         :root {
             --bg-color: #121212;
             --text-color: #ffffff;
             --work-color: #ff3b30;
             --rest-color: #34c759;
+            --prep-color: #ffcc00; /* 準備中の黄色 */
             --card-bg: #1e1e1e;
         }
         body {
@@ -24,7 +25,7 @@
             margin: 0;
             padding: 20px;
             box-sizing: border-box;
-            transition: background-color 0.5s ease;
+            transition: background-color 0.5s ease, color 0.5s ease;
         }
         .container {
             text-align: center;
@@ -34,7 +35,7 @@
             padding: 30px;
             border-radius: 20px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-            transition: background-color 0.5s ease;
+            transition: background-color 0.5s ease, color 0.5s ease;
         }
         
         /* 設定エリアのスタイル */
@@ -110,6 +111,7 @@
             font-size: 1.4rem;
             color: #aaa;
             margin-bottom: 30px;
+            transition: color 0.5s ease;
         }
         
         /* 操作ボタン */
@@ -158,11 +160,11 @@
         </div>
         <div class="input-group">
             <label for="setsInput">SETS (セット数)</label>
-            <input type="number" id="setsInput" value="3" min="1" max="99">
+            <input type="number" id="setsInput" value="8" min="1" max="99">
         </div>
         <div class="input-group">
-            <label id="volLabel" for="volumeInput">VOLUME (音量: 75%)</label>
-            <input type="range" id="volumeInput" min="0" max="100" value="75">
+            <label id="volLabel" for="volumeInput">VOLUME (音量: 50%)</label>
+            <input type="range" id="volumeInput" min="0" max="100" value="50">
         </div>
     </div>
 
@@ -180,17 +182,23 @@
 
 <script>
     // --- 状態管理変数 ---
+    const PREP_TIME = 3; // 準備時間 (3秒)
+
     let workTime = 20;
     let restTime = 10;
-    let totalSets = 3;
-    let volumePercent = 75;
+    let totalSets = 8;
+    let volumePercent = 50;
 
     let currentSet = 1;
-    let isWork = true; // true: 運動中, false: 休憩中
-    let timeLeft = 20;
+    // フェーズ状態: 'prep' (準備中), 'work' (運動中), 'rest' (休憩中)
+    let phase = 'prep'; 
+    let timeLeft = PREP_TIME;
     let timerId = null;
     let isRunning = false;
     let hasStarted = false;
+
+    // 常時点灯保持用（Wake Lock）
+    let wakeLock = null;
 
     // --- Web Audio API (効果音生成) ---
     let audioCtx = null;
@@ -204,7 +212,6 @@
         }
     }
 
-    // 指定した周波数と長さでビープ音を鳴らす
     function playBeep(frequency, duration, type = 'sine') {
         try {
             initAudio();
@@ -230,26 +237,48 @@
         }
     }
 
-    // 各シチュエーションの効果音
+    // 効果音
     function soundCountdown() {
         playBeep(800, 0.1); // 低い「ピッ」
     }
 
     function soundStart() {
-        playBeep(1200, 0.3); // 高い「ピィー」（運動開始）
+        playBeep(1200, 0.3); // 高い「ピィー」（WORK開始）
     }
 
     function soundRest() {
-        playBeep(1000, 0.3); // 中くらいの「ピィー」（休憩開始）
+        playBeep(1000, 0.3); // 中くらいの「ピィー」（REST開始）
     }
 
     function soundComplete() {
-        // ピ・ピ・ピ・ポーン (終了ファンファーレ)
         setTimeout(() => playBeep(880, 0.12), 0);
         setTimeout(() => playBeep(1046, 0.12), 150);
         setTimeout(() => playBeep(1318, 0.12), 300);
         setTimeout(() => playBeep(1760, 0.4), 450);
     }
+
+    // --- 画面スリープ防止（Wake Lock） ---
+    async function requestWakeLock() {
+        if ('wakeLock' in navigator) {
+            try {
+                wakeLock = await navigator.wakeLock.request('screen');
+            } catch (err) {
+                console.log(`Wake Lock Error: ${err.name}, ${err.message}`);
+            }
+        }
+    }
+
+    function releaseWakeLock() {
+        if (wakeLock !== null) {
+            wakeLock.release().then(() => { wakeLock = null; });
+        }
+    }
+
+    document.addEventListener('visibilitychange', async () => {
+        if (wakeLock !== null && document.visibilityState === 'visible' && isRunning) {
+            await requestWakeLock();
+        }
+    });
 
     // --- DOM要素 ---
     const workInput = document.getElementById('workInput');
@@ -276,13 +305,11 @@
         volLabel.textContent = `VOLUME (音量: ${volumePercent}%)`;
 
         if (!hasStarted) {
-            timeLeft = workTime;
-            timerEl.textContent = timeLeft;
+            timerEl.textContent = workTime;
             infoEl.textContent = `セット: 1 / ${totalSets}`;
         }
     }
 
-    // 入力欄やスライダーが変更されたら即座に反映
     [workInput, restInput, setsInput, volumeInput].forEach(input => {
         input.addEventListener('input', applySettings);
     });
@@ -298,43 +325,57 @@
         timerEl.textContent = timeLeft;
         infoEl.textContent = `セット: ${currentSet} / ${totalSets}`;
         
-        if (isWork) {
+        if (phase === 'prep') {
+            statusEl.textContent = "READY...";
+            mainContainer.style.backgroundColor = "var(--prep-color)";
+            mainContainer.style.color = "#000000"; // 文字色：黒
+            infoEl.style.color = "#333333";
+        } else if (phase === 'work') {
             statusEl.textContent = "WORK";
             mainContainer.style.backgroundColor = "var(--work-color)";
-        } else {
+            mainContainer.style.color = "#ffffff"; // 文字色：白
+            infoEl.style.color = "#aaa";
+        } else if (phase === 'rest') {
             statusEl.textContent = "REST";
             mainContainer.style.backgroundColor = "var(--rest-color)";
+            mainContainer.style.color = "#ffffff"; // 文字色：白
+            infoEl.style.color = "#aaa";
         }
     }
 
-    // --- タイマーのメイン処理（1秒ごとの刻み） ---
+    // --- タイマーのメイン処理 ---
     function tick() {
-        // カウントダウンを進める前に「1秒」だった場合の切り替え判定を行う
         if (timeLeft > 1) {
             timeLeft--;
             timerEl.textContent = timeLeft;
             
-            // 残り3秒・2秒のタイミングで「ピッ」を鳴らす（切り替え直前のビープ音）
+            // 残り3秒以下のカウントダウン音（PREP中も鳴ります）
             if (timeLeft <= 3) {
                 soundCountdown();
             }
         } else {
-            // timeLeft が 1 の状態で1秒経過した＝フェーズ切り替えの瞬間
-            if (isWork) {
+            // 1秒から次のフェーズへ切替
+            if (phase === 'prep') {
+                // 準備終了 -> 第1セット WORK へ
+                phase = 'work';
+                timeLeft = workTime;
+                soundStart();
+                updateDisplay();
+            } else if (phase === 'work') {
                 if (currentSet < totalSets) {
-                    // WORK(1秒)終了 -> すぐにRESTの設定秒数へ切り替え
-                    isWork = false;
+                    // WORK終了 -> REST へ
+                    phase = 'rest';
                     timeLeft = restTime;
                     soundRest();
                     updateDisplay();
                 } else {
-                    // 全セット終了時のみ「0秒」を表示してファンファーレ
+                    // 全セット終了
                     endTimer();
                     return;
                 }
-            } else {
-                // REST(1秒)終了 -> すぐに次のセットのWORK設定秒数へ切り替え
-                isWork = true;
+            } else if (phase === 'rest') {
+                // REST終了 -> 次セットの WORK へ
+                phase = 'work';
                 currentSet++;
                 timeLeft = workTime;
                 soundStart();
@@ -344,14 +385,19 @@
     }
 
     // --- コントロール関数 ---
-    function startTimer() {
+    async function startTimer() {
         initAudio();
+        await requestWakeLock();
         
         if (!hasStarted) {
             hasStarted = true;
             settingsArea.classList.add('hidden');
             resetBtn.style.display = 'block';
-            soundStart();
+            
+            // 初回スタート時は準備フェーズ（3秒）から開始
+            phase = 'prep';
+            timeLeft = PREP_TIME;
+            soundCountdown(); // 最初のピッ音
         }
 
         isRunning = true;
@@ -367,6 +413,7 @@
         startBtn.textContent = "START";
         startBtn.classList.remove('running');
         clearInterval(timerId);
+        releaseWakeLock();
     }
 
     function endTimer() {
@@ -374,7 +421,10 @@
         statusEl.textContent = "COMPLETE!";
         timerEl.textContent = "0";
         mainContainer.style.backgroundColor = "var(--card-bg)";
+        mainContainer.style.color = "#ffffff";
+        infoEl.style.color = "#aaa";
         soundComplete();
+        releaseWakeLock();
     }
 
     function resetTimer() {
@@ -383,18 +433,21 @@
         isRunning = false;
         
         currentSet = 1;
-        isWork = true;
+        phase = 'prep';
         applySettings();
         
         statusEl.textContent = "READY";
         mainContainer.style.backgroundColor = "var(--card-bg)";
+        mainContainer.style.color = "#ffffff";
+        infoEl.style.color = "#aaa";
         settingsArea.classList.remove('hidden');
         resetBtn.style.display = 'none';
         startBtn.textContent = "START";
         startBtn.classList.remove('running');
+        releaseWakeLock();
     }
 
-    // --- ボタンのクリックイベント ---
+    // --- ボタンイベント ---
     startBtn.addEventListener('click', () => {
         if (isRunning) {
             pauseTimer();
